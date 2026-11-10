@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Freeze Tag</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #9fdcff; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 4px #0009; font-weight: 800; }
+  #round { top: max(10px, env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 22px; }
+  #round small { display: block; font-size: 15px; letter-spacing: 2px; margin-top: 2px; }
+  #role { top: calc(max(10px, env(safe-area-inset-top)) + 62px); left: 50%; transform: translateX(-50%); padding: 3px 14px; border-radius: 999px; font-size: 14px; white-space: nowrap; text-shadow: none; }
+  #role.tagger { background: #1d8fe0; } #role.runner { background: #ff7a3d; } #role:empty { display: none; }
+  #big { inset: 0; display: grid; place-items: center; text-align: center; font-size: min(13vw, 92px); line-height: 1; color: #fff; -webkit-text-stroke: 3px #17508f; padding: 0 16px; }
+  #big small { display: block; font-size: min(5vw, 22px); -webkit-text-stroke: 0; margin-top: 12px; }
+  #msg { left: 16px; right: 16px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); text-align: center; font-size: 16px; }
+  #net { bottom: max(10px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; opacity: .85; white-space: nowrap; }
+  #frost { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s; background: radial-gradient(ellipse at center, transparent 60%, #c9f3ffcc 100%); box-shadow: inset 0 0 50px #ffffff88; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #0b2a4a66; }
+  #over[hidden], #stick[hidden], #dash[hidden] { display: none; }
+  .card { width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 18px; background: #133a63; border: 2px solid #ffffff33; box-sizing: border-box; }
+  .card h2 { margin: 0 0 4px; font-size: 24px; color: #ffe066; }
+  .card h3 { margin: 14px 0 4px; font-size: 14px; color: #8fdcff; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card li.me { color: #ffe066; font-weight: 700; }
+  .card p { margin: 6px 0 0; font-size: 14px; opacity: .9; }
+  button.go { margin-top: 16px; width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe066; color: #133a63; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  #stick { position: fixed; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff88; pointer-events: none; }
+  #stick i { position: absolute; left: 35px; top: 35px; width: 50px; height: 50px; border-radius: 50%; background: #ffffffaa; }
+  #dash { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(26px, env(safe-area-inset-bottom)); width: 92px; height: 92px; border-radius: 50%;
+          border: 3px solid #ffffffaa; background: #1d8fe088; color: #fff; font: 800 16px system-ui, sans-serif; touch-action: none; }
+  #dash.wait { opacity: .45; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+<script type="importmap">{ "imports": { "three": "./libs/three.module.min.js" } }</script>
+</head>
+<body>
+<div id="frost"></div>
+<div class="hud" id="round"></div>
+<div class="hud" id="role"></div>
+<div class="hud" id="big"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="net">Connecting…</div>
+<div id="stick" hidden><i></i></div>
+<button id="dash" hidden>DASH</button>
+<div id="over" hidden><div class="card">
+  <h2 id="overTitle"></h2><p id="overLine"></p>
+  <h3>This round</h3><ol id="results"></ol>
+  <h3>Best rounds</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Play again</button>
+  <p id="next"></p>
+</div></div>
+<script type="module">
+/* ═══ FREEZE TAG · a Multiplayer Agent starter ═════════════════════════════════════════
+ * Taggers freeze. Runners thaw. Party, 3–10 players; bots fill empty seats.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ speeds, the dash, reach, timers, points, what stands on the playground
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   PLAYGROUND .... grass, fence, toy blocks, towers, trees; bumping into them; paths for bots
+ *   KIDS .......... the player model, the tagger's frost crown, the ice block, name tags
+ *   ROUND (HOST) .. brief → play → over: picking taggers, freezing, thawing, points.
+ *                   Only the host writes these.
+ *   BOTS .......... bot taggers chase, bot runners flee and thaw friends (the host runs
+ *                   them; in ?attract the same brain drives your own player)
+ *   ME ............ running and dashing. Each player writes only its own.
+ *   HUD & RESULTS . timer, your role, hints, results card, leaderboard
+ *   INPUT & SOUND . keyboard, mouse, touch stick and dash button, WebAudio effects
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player writes its OWN entity: `p` (one packed JSON field: round id, position,
+ *     facing, running or dashing) about 12 times a second, `hb` (heartbeat) once a second,
+ *     and `n`/`c` (name, color) once.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host writes the shared fields `game` (id, v, phase,
+ *     timers, who tags, who is frozen, who is being thawed, points, the winner) and `bots`
+ *     (every bot's position, ~10 times a second). A new host adopts both and carries on.
+ *   - Freezing and thawing need no messages: the host compares everyone's latest position
+ *     every frame and writes the result into `game`. Your own client stops you while
+ *     `game` says you are frozen.
+ *   - The only intent is "again" (start the next round sooner from the results card).
+ *   - A new round starts only when the host bumps game.id; every client then puts its own
+ *     player on its start spot. Other players are drawn a moment in the past, between two
+ *     of their updates, so they glide instead of stepping.
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "best-round": your most points in one round, on the results card.
+ */
+import * as THREE from "three";
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 8,              // bots fill the round up to this many players
+  taggers: 0.25,         // share of the players who tag (at least 1): 2 of 8
+  briefMs: 3500,         // runners scatter while the taggers count down
+  roundMs: 60000,        // runners must last this long
+  overMs: 9000,          // results before the next round
+  speed: 6.4,            // runner speed, units/s
+  taggerSpeed: 6.6,      // taggers are a little faster
+  botPace: { runner: 0.92, tagger: 0.95 }, // bots run at this share of a player's speed
+  accel: 24,             // how quickly you reach full speed
+  dashSpeed: 2.4,        // a dash is this many times your speed...
+  dashMs: 220,           // ...for this long
+  dashCooldown: 3000,    // ms before you can dash again
+  radius: 0.45,          // how wide a kid is
+  tagReach: 1.1,         // a tagger this close freezes a runner
+  thawReach: 1.6,        // a free runner this close to a frozen one thaws them...
+  thawMs: 900,           // ...after standing there this long
+  safeMs: 1500,          // a thawed runner can't be frozen again for this long
+  points: { freeze: 1, thaw: 1, survive: 3, sweep: 3 }, // survive = free at the bell; sweep = each tagger when everyone is frozen
+  botFear: 8,            // a bot runner runs away from a tagger this close
+  arena: 40,             // the playground is arena × arena units, fenced
+  board: "best-round",
+  // What stands on the playground. block = a box (w × d, h tall, with a letter); tower, post, tree = a circle (r).
+  things: [
+    { kind: "tower", x: 0, z: 0, r: 1.8, h: 4.2, color: "#ffd23f" },
+    { kind: "block", x: -9, z: -9, w: 4, d: 4, h: 2.6, color: "#ff5d73", letter: "A" },
+    { kind: "block", x: 9, z: -9, w: 4, d: 4, h: 2.6, color: "#4da3ff", letter: "B" },
+    { kind: "block", x: -9, z: 9, w: 4, d: 4, h: 2.6, color: "#3fc78a", letter: "C" },
+    { kind: "block", x: 9, z: 9, w: 4, d: 4, h: 2.6, color: "#b77dff", letter: "D" },
+    { kind: "block", x: 0, z: -15, w: 8, d: 1, h: 1.1, color: "#ff9f43" },
+    { kind: "block", x: 0, z: 15, w: 8, d: 1, h: 1.1, color: "#ff9f43" },
+    { kind: "block", x: -15, z: 0, w: 1, d: 8, h: 1.1, color: "#ff9f43" },
+    { kind: "block", x: 15, z: 0, w: 1, d: 8, h: 1.1, color: "#ff9f43" },
+    { kind: "post", x: 5, z: -4.5, r: 0.7, h: 2.2, color: "#3fc7c0" },
+    { kind: "post", x: -5, z: 4.5, r: 0.7, h: 2.2, color: "#3fc7c0" },
+    { kind: "tree", x: -16.5, z: 9, r: 0.7 }, { kind: "tree", x: 16.5, z: -9, r: 0.7 },
+    { kind: "tree", x: -7, z: -16.5, r: 0.7 }, { kind: "tree", x: 7, z: 16.5, r: 0.7 },
+    { kind: "tree", x: -17, z: -17, r: 0.7 }, { kind: "tree", x: 17, z: 17, r: 0.7 },
+  ],
+};
+const BOT_NAMES = ["Skip", "Pip", "Juno", "Dot", "Bix", "Rue", "Taz", "Momo", "Kit", "Zuzu"];
+const COLORS = ["#ff5d73", "#ff9f43", "#ffd23f", "#3fc78a", "#4da3ff", "#b77dff", "#ff6fb5", "#3fc7c0", "#a3e635", "#f97316"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'freeze-tag',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+if (ATTRACT) Object.assign(CONFIG, { seats: 9, taggers: 0.34, briefMs: 600, roundMs: 26000, overMs: 2500, taggerSpeed: 7.6, botPace: { runner: 0.9, tagger: 1 }, thawMs: 700, botFear: 6 });
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A shared JSON field, parsed once per change (read-only: never mutate what this returns). */
+function shared(key, fb) { const raw = S.shared[key], m = memo.get(key); if (m && m.raw === raw) return m.v; const v = parse(raw, fb); memo.set(key, { raw, v }); return v; }
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+const isBot = (id) => id[0] === "@"; // bot ids look like "@3"; sessionIds never have an @
+
+// ── PLAYGROUND ──────────────────────────────────────────────────────────────────────
+const HALF = CONFIG.arena / 2, R = CONFIG.radius;
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const SOLIDS = CONFIG.things.map((t) => (t.kind === "block" ? { x: t.x, z: t.z, w: t.w, d: t.d } : { x: t.x, z: t.z, r: t.r }));
+/** Push a body ({x, z}) out of everything solid and keep it inside the fence. */
+function moveBody(o, dx, dz) {
+  o.x += dx; o.z += dz;
+  for (const s of SOLIDS) {
+    if (s.r) { const ex = o.x - s.x, ez = o.z - s.z, d = Math.hypot(ex, ez), min = s.r + R; if (d < min && d > 1e-4) { o.x = s.x + (ex / d) * min; o.z = s.z + (ez / d) * min; } continue; }
+    const cx = clamp(o.x, s.x - s.w / 2, s.x + s.w / 2), cz = clamp(o.z, s.z - s.d / 2, s.z + s.d / 2), ex = o.x - cx, ez = o.z - cz, d = Math.hypot(ex, ez);
+    if (d >= R) continue;
+    if (d > 1e-4) { o.x = cx + (ex / d) * R; o.z = cz + (ez / d) * R; continue; }
+    const px = s.w / 2 - Math.abs(o.x - s.x), pz = s.d / 2 - Math.abs(o.z - s.z); // inside: out through the nearest side
+    if (px < pz) o.x = s.x + Math.sign(o.x - s.x || 1) * (s.w / 2 + R); else o.z = s.z + Math.sign(o.z - s.z || 1) * (s.d / 2 + R);
+  }
+  const lim = HALF - 0.6; o.x = clamp(o.x, -lim, lim); o.z = clamp(o.z, -lim, lim);
+}
+// A 1-unit grid for the bots: a cell is blocked when a kid standing on its centre would touch something.
+const GN = CONFIG.arena, blocked = new Uint8Array(GN * GN);
+const cellOf = (v) => clamp(Math.floor(v + HALF), 0, GN - 1);
+const centerOf = (cx, cz) => ({ x: cx - HALF + 0.5, z: cz - HALF + 0.5 });
+for (let cz = 0; cz < GN; cz++) for (let cx = 0; cx < GN; cx++) {
+  const p = centerOf(cx, cz), m = R + 0.25;
+  blocked[cx + cz * GN] = Math.abs(p.x) > HALF - 1 || Math.abs(p.z) > HALF - 1 || SOLIDS.some((s) => (s.r ? Math.hypot(p.x - s.x, p.z - s.z) < s.r + m : Math.abs(p.x - s.x) < s.w / 2 + m && Math.abs(p.z - s.z) < s.d / 2 + m)) ? 1 : 0;
+}
+const walkable = (x, z) => Math.abs(x) < HALF - 1 && Math.abs(z) < HALF - 1 && !blocked[cellOf(x) + cellOf(z) * GN];
+/** Nothing solid on the straight line from a to b (the first half unit is ignored: you may be against a wall). */
+function clearLine(a, b) {
+  const d = dist(a, b), n = Math.ceil(d / 0.35);
+  for (let i = 1; i <= n; i++) { const t = i / n; if (t * d < 0.5) continue; if (!walkable(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t)) return false; }
+  return true;
+}
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+/** A walkable route from a to b as cell centres (ending at b), or [] if there is none. */
+function route(a, b) {
+  const s = cellOf(a.x) + cellOf(a.z) * GN, goal = cellOf(b.x) + cellOf(b.z) * GN;
+  if (blocked[goal]) return [];
+  const prev = new Int32Array(GN * GN).fill(-1), q = [s];
+  prev[s] = s;
+  for (let h = 0; h < q.length && prev[goal] < 0; h++) {
+    const k = q[h], x = k % GN, z = (k / GN) | 0;
+    for (const [dx, dz] of DIRS) {
+      const nx = x + dx, nz = z + dz, n = nx + nz * GN;
+      if (nx < 0 || nz < 0 || nx >= GN || nz >= GN || blocked[n] || prev[n] >= 0 || (dx && dz && (blocked[x + dx + z * GN] || blocked[x + (z + dz) * GN]))) continue;
+      prev[n] = k; q.push(n);
+    }
+  }
+  if (prev[goal] < 0) return [];
+  const out = [{ x: b.x, z: b.z }];
+  for (let k = prev[goal]; k !== prev[k]; k = prev[k]) out.unshift(centerOf(k % GN, (k / GN) | 0));
+  return out;
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: !ATTRACT }); // the preview recorder renders in software: keep it cheap
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.autoUpdate = false; // only the playground casts sun shadows, so draw them once
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 300);
+function fit() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.fov = ATTRACT ? 44 : camera.aspect < 1 ? 70 : 50; camera.updateProjectionMatrix(); } // wider on a tall phone
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+function canvasTex(w, h, paint, rx, ry) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; paint(c.getContext("2d"), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  if (rx) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry); }
+  return t;
+}
+scene.background = canvasTex(4, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, "#5cb8ff"); g.addColorStop(0.6, "#bfe6ff"); g.addColorStop(1, "#eaf7ff"); c.fillStyle = g; c.fillRect(0, 0, w, h); });
+scene.fog = new THREE.Fog("#d9f0ff", 40, 95);
+scene.add(new THREE.HemisphereLight("#eaf6ff", "#6da04a", 1.5));
+const sun = new THREE.DirectionalLight("#fff3dc", 2.0);
+sun.position.set(14, 30, 10); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 80 }); sun.shadow.bias = -0.0006;
+scene.add(sun);
+const mat = (color, more) => new THREE.MeshStandardMaterial({ color, roughness: 0.75, ...more });
+const add = (geo, m, x, y, z, shadow = true) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; scene.add(o); return o; };
+const speckle = (c, w, h, n, col) => { for (let i = 0; i < n; i++) { c.fillStyle = col(); c.fillRect(Math.random() * w, Math.random() * h, 2, 2); } };
+// Grass with mowing stripes, a soft rubber mat around the tower.
+const grass = canvasTex(128, 128, (c, w, h) => { for (let i = 0; i < 4; i++) { c.fillStyle = i % 2 ? "#86cc5f" : "#7bc257"; c.fillRect(0, (i * h) / 4, w, h / 4); } speckle(c, w, h, 500, () => (Math.random() < 0.5 ? "#6fb54f" : "#95d86c")); }, 12, 12);
+add(new THREE.PlaneGeometry(150, 150).rotateX(-Math.PI / 2), mat("#ffffff", { map: grass, roughness: 1 }), 0, 0, 0, false);
+const matTex = canvasTex(256, 256, (c) => { for (let i = 6; i > 0; i--) { c.fillStyle = i % 2 ? "#ff9f6e" : "#3fc7c0"; c.beginPath(); c.arc(128, 128, (128 * i) / 6, 0, 7); c.fill(); } });
+add(new THREE.CircleGeometry(6.5, 48).rotateX(-Math.PI / 2), mat("#ffffff", { map: matTex, roughness: 0.9 }), 0, 0.02, 0, false);
+// Fence: posts and two rails all the way round.
+{
+  const n = CONFIG.arena / 2, posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 1.2, 0.3), mat("#ffffff"), n * 4), m4 = new THREE.Matrix4();
+  for (let i = 0; i < n; i++) {
+    const a = -HALF + i * 2;
+    [[a, -HALF], [HALF, a], [-a, HALF], [-HALF, -a]].forEach(([x, z], k) => posts.setMatrixAt(i * 4 + k, m4.makeTranslation(x, 0.6, z)));
+  }
+  posts.castShadow = true; scene.add(posts);
+  const rail = mat("#ffffff");
+  for (const y of [0.45, 0.95]) for (const [x, z, w, d] of [[0, -HALF, CONFIG.arena, 0.12], [0, HALF, CONFIG.arena, 0.12], [-HALF, 0, 0.12, CONFIG.arena], [HALF, 0, 0.12, CONFIG.arena]]) add(new THREE.BoxGeometry(w, 0.14, d), rail, x, y, z);
+}
+// Toy blocks (with a letter), low beams, the striped tower, posts and trees.
+const letterTex = (color, letter) => canvasTex(128, 128, (c) => {
+  c.fillStyle = color; c.fillRect(0, 0, 128, 128); c.strokeStyle = "#ffffffcc"; c.lineWidth = 10; c.strokeRect(8, 8, 112, 112);
+  if (letter) { c.fillStyle = "#ffffff"; c.font = "900 78px system-ui, sans-serif"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(letter, 64, 70); }
+});
+const trees = CONFIG.things.filter((t) => t.kind === "tree");
+for (const t of CONFIG.things) {
+  if (t.kind === "block") {
+    const side = mat("#ffffff", { map: letterTex(t.color, t.letter) }), top = mat("#ffffff", { map: letterTex(t.color, "") });
+    add(new THREE.BoxGeometry(t.w, t.h, t.d), t.letter ? [side, side, top, top, side, side] : mat(t.color), t.x, t.h / 2, t.z);
+  } else if (t.kind === "tower") {
+    const stripes = canvasTex(64, 128, (c) => { for (let y = 0; y < 128; y += 32) { c.fillStyle = t.color; c.fillRect(0, y, 64, 16); c.fillStyle = "#ffffff"; c.fillRect(0, y + 16, 64, 16); } });
+    add(new THREE.CylinderGeometry(t.r, t.r + 0.1, t.h, 28), mat("#ffffff", { map: stripes }), t.x, t.h / 2, t.z);
+    add(new THREE.ConeGeometry(t.r + 0.6, 1.8, 28), mat("#ff5d73"), t.x, t.h + 0.9, t.z);
+    add(new THREE.SphereGeometry(0.25, 12, 10), mat("#ffd23f"), t.x, t.h + 1.9, t.z);
+  } else if (t.kind === "post") {
+    add(new THREE.CylinderGeometry(t.r, t.r, t.h, 20), mat(t.color), t.x, t.h / 2, t.z);
+    add(new THREE.SphereGeometry(t.r * 1.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat("#ffffff"), t.x, t.h, t.z);
+  }
+}
+{
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.3, 0.42, 1.8, 8), mat("#8a5a34"), trees.length);
+  const crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1.45, 0), mat("#4fae4a", { flatShading: true }), trees.length), m4 = new THREE.Matrix4();
+  trees.forEach((t, i) => { trunk.setMatrixAt(i, m4.makeTranslation(t.x, 0.9, t.z)); crown.setMatrixAt(i, m4.makeTranslation(t.x, 2.6, t.z)); });
+  trunk.castShadow = crown.castShadow = true; scene.add(trunk, crown);
+}
+renderer.shadowMap.needsUpdate = true;
+
+// Particles: a ring buffer of little cubes (ice shards, warm sparks, dust).
+const PARTS = 240, parts = Array.from({ length: PARTS }, () => ({ life: 0 })), M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), E3 = new THREE.Euler(), V3 = new THREE.Vector3(), SC = new THREE.Vector3();
+const partMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), new THREE.MeshBasicMaterial(), PARTS);
+partMesh.setColorAt(0, new THREE.Color("#fff")); partMesh.frustumCulled = false; scene.add(partMesh);
+let nextPart = 0;
+function burst(x, y, z, colors, n, speed) {
+  for (let i = 0; i < n; i++) {
+    const p = parts[nextPart]; partMesh.setColorAt(nextPart, new THREE.Color(colors[i % colors.length])); nextPart = (nextPart + 1) % PARTS;
+    Object.assign(p, { x, y, z, vx: (Math.random() - 0.5) * speed, vy: Math.random() * speed * 0.9, vz: (Math.random() - 0.5) * speed, life: 0.6 + Math.random() * 0.5, r: Math.random() * 6 });
+  }
+  partMesh.instanceColor.needsUpdate = true;
+}
+function drawParts(dt) {
+  parts.forEach((p, i) => {
+    if (p.life > 0) { p.life -= dt; p.vy -= 14 * dt; p.x += p.vx * dt; p.y = Math.max(0.08, p.y + p.vy * dt); p.z += p.vz * dt; p.r += dt * 6; }
+    const s = p.life > 0 ? Math.min(1, p.life * 2.5) : 0;
+    partMesh.setMatrixAt(i, M4.compose(V3.set(p.x || 0, p.y || 0, p.z || 0), Q.setFromEuler(E3.set(p.r || 0, (p.r || 0) * 0.7, 0)), SC.set(s, s, s)));
+  });
+  partMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ── KIDS ────────────────────────────────────────────────────────────────────────────
+const skin = mat("#ffe0c2"), black = mat("#1d2433"), shoe = mat("#3a3f4f"), hairs = ["#4a2c1a", "#2b2b33", "#c98a3c", "#7a3b1e"].map((c) => mat(c));
+const iceMat = new THREE.MeshStandardMaterial({ color: "#a8ecff", emissive: "#3fb8ff", emissiveIntensity: 0.25, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.55, depthWrite: false });
+const frostMat = new THREE.MeshStandardMaterial({ color: "#e8fbff", emissive: "#4fc8ff", emissiveIntensity: 1.3, roughness: 0.2 });
+const bodyGeo = new THREE.CapsuleGeometry(0.42, 0.42, 4, 14), headGeo = new THREE.SphereGeometry(0.44, 18, 14), eyeGeo = new THREE.SphereGeometry(0.065, 8, 6);
+const hairGeo = new THREE.SphereGeometry(0.47, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.55).rotateX(-0.35), armGeo = new THREE.CapsuleGeometry(0.1, 0.34, 3, 8), footGeo = new THREE.SphereGeometry(0.15, 10, 8), spikeGeo = new THREE.ConeGeometry(0.13, 0.62, 6);
+const iceGeo = new THREE.BoxGeometry(1.25, 2.25, 1.25), iceEdges = new THREE.EdgesGeometry(iceGeo);
+const blobGeo = new THREE.CircleGeometry(0.55, 18).rotateX(-Math.PI / 2), blobMat = new THREE.MeshBasicMaterial({ color: "#000", transparent: true, opacity: 0.25, depthWrite: false });
+const auraGeo = new THREE.RingGeometry(0.8, 1.05, 36).rotateX(-Math.PI / 2);
+const ringGeos = Array.from({ length: 11 }, (_, i) => new THREE.RingGeometry(0.85, 1.1, 36, 1, Math.PI / 2, Math.max(0.01, (i / 10) * Math.PI * 2)).rotateX(-Math.PI / 2));
+function nameTag(text) {
+  const tex = canvasTex(256, 64, (c) => { c.font = "bold 32px system-ui"; c.textAlign = "center"; c.lineWidth = 6; c.strokeStyle = "#000a"; c.strokeText(text, 128, 44); c.fillStyle = "#fff"; c.fillText(text, 128, 44); });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true })); s.scale.set(3, 0.75, 1); s.position.y = 2.75; return s;
+}
+function makeKid(color, name) {
+  const g = new THREE.Group(), rig = new THREE.Group(), bodyMat = mat(color, { roughness: 0.55 });
+  const part = (geo, m, x, y, z, parent = rig) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
+  part(bodyGeo, bodyMat, 0, 0.78, 0);
+  const head = new THREE.Group(); head.position.y = 1.6; rig.add(head);
+  part(headGeo, skin, 0, 0, 0, head);
+  part(hairGeo, hairs[[...color].reduce((n, ch) => n + ch.charCodeAt(0), 0) % hairs.length], 0, 0.02, -0.03, head);
+  for (const s of [-1, 1]) part(eyeGeo, black, s * 0.15, 0.05, 0.4, head);
+  const arms = [-1, 1].map((s) => { const p = new THREE.Group(); p.position.set(s * 0.5, 1.1, 0); rig.add(p); part(armGeo, bodyMat, 0, -0.24, 0, p); return p; });
+  const feet = [-1, 1].map((s) => part(footGeo, shoe, s * 0.2, 0.12, 0.05));
+  const crown = new THREE.Group(); crown.position.y = 0.32; head.add(crown); // the tagger's frost crown
+  for (let i = 0; i < 7; i++) { const a = (i / 7) * Math.PI * 2, sp = part(spikeGeo, frostMat, Math.sin(a) * 0.26, 0.2, Math.cos(a) * 0.26, crown); sp.rotation.set(Math.cos(a) * 0.4, 0, -Math.sin(a) * 0.4); }
+  part(new THREE.OctahedronGeometry(0.2), frostMat, 0, 0.42, 0, crown); // the ice gem on top
+  const aura = new THREE.Mesh(auraGeo, new THREE.MeshBasicMaterial({ color: "#5fd0ff", transparent: true, opacity: 0.75, depthWrite: false })); aura.position.y = 0.04;
+  const ice = new THREE.Mesh(iceGeo, iceMat); ice.position.y = 1.1; ice.add(new THREE.LineSegments(iceEdges, new THREE.LineBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.8 })));
+  const ring = new THREE.Mesh(ringGeos[0], new THREE.MeshBasicMaterial({ color: "#ffb347", transparent: true, opacity: 0.9, depthWrite: false })); ring.position.y = 0.05;
+  const blob = new THREE.Mesh(blobGeo, blobMat); blob.position.y = 0.03;
+  g.add(rig, aura, ice, ring, blob);
+  if (name && !ATTRACT) g.add(nameTag(name));
+  scene.add(g);
+  return { g, rig, head, arms, feet, crown, aura, ice, ring, bodyMat, x: 0, z: 0, h: 0, iceT: 0, color };
+}
+/** Pose a kid: a = 0 idle, 1 run, 2 dash; frozen kids stand stiff in their ice block. */
+function poseKid(v, a, tagger, frozen, thaw, safe, t, dt) {
+  v.iceT = clamp(v.iceT + (frozen ? dt * 6 : -dt * 4), 0, 1);
+  v.ice.visible = v.iceT > 0.01; v.ice.scale.setScalar(0.6 + 0.4 * v.iceT); v.ice.rotation.y = 0.3;
+  v.crown.visible = v.aura.visible = tagger;
+  if (tagger) { v.aura.rotation.y = t * 2; v.aura.scale.setScalar(1 + Math.sin(t * 6) * 0.06); v.crown.rotation.y = t * 1.5; }
+  v.ring.visible = frozen && thaw > 0;
+  if (v.ring.visible) v.ring.geometry = ringGeos[Math.round(clamp(thaw, 0, 1) * 10)];
+  v.bodyMat.emissive.set(safe ? "#ffb347" : "#000000"); v.bodyMat.emissiveIntensity = safe ? 0.35 + 0.25 * Math.sin(t * 20) : 0;
+  if (frozen) { v.rig.position.y = 0; v.rig.rotation.x = 0; v.arms[0].rotation.set(0, 0, -2.6); v.arms[1].rotation.set(0, 0, 2.6); v.feet.forEach((f) => (f.position.z = 0.05)); return; }
+  const run = a > 0 ? 1 : 0, sw = Math.sin(t * (a === 2 ? 22 : 14)) * run;
+  v.rig.position.y = Math.abs(sw) * 0.12;
+  v.rig.rotation.x = a === 2 ? 0.45 : run * 0.12;
+  v.arms[0].rotation.set(sw * 0.9, 0, -0.15); v.arms[1].rotation.set(-sw * 0.9, 0, 0.15);
+  v.feet.forEach((f, i) => (f.position.z = 0.05 + (i ? sw : -sw) * 0.18));
+}
+const views = new Map(); // id -> drawn kid, for everyone but me
+function viewOf(id, color, name) {
+  let v = views.get(id);
+  if (v && v.color !== color) { scene.remove(v.g); v = null; }
+  if (!v) { v = makeKid(color, name); views.set(id, v); }
+  return v;
+}
+// Other players and (on non-hosts) bots arrive ~10–12 times a second. Draw them LAG ms in the past,
+// between the two updates around that moment, so they glide instead of stepping.
+const LAG = 150, tracks = new Map();
+function feed(id, raw, s, now) {
+  let tr = tracks.get(id);
+  if (!tr) { tr = { raw: null, buf: [] }; tracks.set(id, tr); }
+  if (tr.raw === raw) return tr;
+  tr.raw = raw;
+  const last = tr.buf[tr.buf.length - 1];
+  if (last && Math.hypot(last.x - s.x, last.z - s.z) > 5) tr.buf.length = 0; // a jump (a new round): no sliding across the map
+  tr.buf.push({ at: now, x: s.x, z: s.z, h: s.h, a: s.a || 0 });
+  if (tr.buf.length > 10) tr.buf.shift();
+  return tr;
+}
+function sample(tr, now) {
+  const b = tr.buf, t = now - LAG;
+  if (!b.length) return null;
+  if (b.length === 1 || t <= b[0].at) return b[0];
+  for (let i = b.length - 1; i > 0; i--) {
+    if (b[i - 1].at > t) continue;
+    const p = b[i - 1], q = b[i];
+    if (t >= q.at) return q;
+    const k = (t - p.at) / Math.max(1, q.at - p.at);
+    return { x: p.x + (q.x - p.x) * k, z: p.z + (q.z - p.z) * k, h: p.h + angDiff(q.h, p.h) * k, a: q.a };
+  }
+  return b[b.length - 1];
+}
+
+// ── ROUND (HOST) ────────────────────────────────────────────────────────────────────
+const host = { was: false, last: null, bots: new Map(), lastPub: 0, again: false };
+/** The round as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function game() { const g = shared("game", null); return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g; }
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+const newBody = () => ({ x: 0, z: 0, h: 0, vx: 0, vz: 0, a: 0, dashUntil: 0, dashReady: 0, dx: 0, dz: 1, goal: null, path: [], chase: "", think: 0, wantDash: false, wander: 0 });
+
+function startRound(id) {
+  const here = livePlayers(), seated = here.filter((h) => !(ATTRACT && h === net.sessionId)); // in ?attract your autopilot takes a bot's seat
+  syncBots(Math.max(0, CONFIG.seats - seated.length - (ATTRACT ? 1 : 0)));
+  const ids = [...here, ...host.bots.keys()], prev = game(), was = new Set(prev ? prev.tag : []);
+  // Taggers: up to half the people (so friends chase each other; a solo player tags every other round,
+  // starting as a runner), the rest bots. Last round's taggers go last.
+  const n = Math.max(1, Math.round(ids.length * CONFIG.taggers));
+  const shuffle = (list) => list.map((i) => [i, (was.has(i) ? 2 : 0) + Math.random()]).sort((a, b) => a[1] - b[1]).map((r) => r[0]);
+  const humans = shuffle(here), bots = shuffle([...host.bots.keys()]);
+  const nPeople = Math.min(n, prev ? Math.ceil(humans.length / 2) : Math.floor(humans.length / 2), humans.filter((i) => !was.has(i)).length);
+  const tag = [...humans.slice(0, nPeople), ...bots, ...humans.slice(nPeople)].slice(0, n);
+  const t = Date.now();
+  const G = { id, phase: "brief", startAt: t + CONFIG.briefMs, endsAt: t + CONFIG.briefMs + CONFIG.roundMs, tag, frz: {}, th: {}, safe: {}, pts: {}, win: "", endedAt: 0,
+    roster: ids.map((i) => [i, nameOf(i), colorOf(i)]) };
+  for (const b of host.bots.values()) Object.assign(b, newBody(), spawnFor(b.id, G));
+  return writeGame(G);
+}
+/** Where someone starts a round: taggers round the tower, runners in a wide ring. */
+function spawnFor(id, G) {
+  const tagger = G.tag.includes(id), list = G.roster.map((r) => r[0]).filter((i) => G.tag.includes(i) === tagger);
+  let i = list.indexOf(id), n = list.length;
+  if (i < 0) { i = [...id].reduce((s, ch) => s + ch.charCodeAt(0), 0) % 12; n = 12; } // joined mid-round
+  const a = (i / Math.max(1, n)) * Math.PI * 2 + (tagger ? 0 : 0.4);
+  for (let r = tagger ? 3.4 : 12; r < 19; r += 0.5) { const p = { x: Math.sin(a) * r, z: Math.cos(a) * r, h: a + (tagger ? 0 : Math.PI) }; if (walkable(p.x, p.z)) return p; }
+  return { x: 0, z: 10, h: Math.PI };
+}
+/** Become host: take over the round and the bots exactly as state has them. */
+function adopt() {
+  host.was = true; host.bots.clear();
+  for (const b of shared("bots", [])) host.bots.set(b.i, { ...newBody(), id: b.i, name: b.n, color: b.c, x: b.x, z: b.z, h: b.h });
+}
+function syncBots(want) {
+  for (let i = 1; host.bots.size < want && i < 64; i++) if (!host.bots.has("@" + i)) {
+    const used = new Set([...host.bots.values()].map((b) => b.color).concat(livePlayers().map(colorOf)));
+    host.bots.set("@" + i, { ...newBody(), id: "@" + i, name: BOT_NAMES[(i - 1) % BOT_NAMES.length], color: COLORS.find((c) => !used.has(c)) || COLORS[i % COLORS.length] });
+  }
+  while (host.bots.size > want) host.bots.delete([...host.bots.keys()].pop());
+}
+function botList() {
+  if (!isHost()) return shared("bots", []);
+  return [...host.bots.values()].map((b) => ({ i: b.id, n: b.name, c: b.color, x: +b.x.toFixed(2), z: +b.z.toFixed(2), h: +b.h.toFixed(2), a: b.a }));
+}
+const posCache = new Map();
+/** Another player's packed `p` field, parsed once per change. */
+function posOf(id, p) { let c = posCache.get(id); if (!c || c.raw !== p.p) { c = { raw: p.p, v: parse(p.p, null) }; posCache.set(id, c); } return c.v; }
+/** Everyone in this round at their latest known spot: { id, name, color, x, z, h, a, bot, mine }. */
+function people(G) {
+  const out = [], live = new Set(livePlayers());
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === net.sessionId) { out.push({ id, name: myName, color: myColor, x: me.x, z: me.z, h: me.h, a: me.a, mine: true }); continue; }
+    const q = posOf(id, p);
+    if (live.has(id) && q && (!G || q.g === G.id)) out.push({ id, name: p.n || "Player", color: p.c || "#ccc", x: q.x, z: q.z, h: q.h, a: q.a || 0 });
+  }
+  const bots = isHost() ? [...host.bots.values()].map((b) => ({ i: b.id, n: b.name, c: b.color, x: b.x, z: b.z, h: b.h, a: b.a })) : botList();
+  for (const b of bots) out.push({ id: b.i, name: b.n, color: b.c, x: b.x, z: b.z, h: b.h, a: b.a, bot: true });
+  return out;
+}
+const canMove = (id, G) => !G.frz[id] && !(G.phase === "brief" && G.tag.includes(id));
+
+function hostTick(dt, now) {
+  if (!host.was) adopt();
+  let g = game();
+  if (!g) g = startRound(1);
+  const t = Date.now(), G = clone(g);
+  let dirty = false;
+  if (G.phase === "brief" && t >= G.startAt) { G.phase = "play"; dirty = true; }
+  for (const id of livePlayers()) if (G.phase !== "over" && !G.roster.some((r) => r[0] === id)) { G.roster.push([id, nameOf(id), colorOf(id)]); dirty = true; } // joined mid-round: a runner
+  botsTick(dt, G);
+  if (G.phase === "play") dirty = judge(G, t) || dirty;
+  if (dirty) writeGame(G);
+  if (G.phase === "over" && (t >= G.endsAt || host.again)) startRound(G.id + 1);
+  host.again = false;
+  if (now - host.lastPub > 100) { host.lastPub = now; net.setShared("bots", JSON.stringify(botList())); } // ~10/s, one message for all bots
+}
+/** Freeze, thaw, score and end the round, all from everyone's latest position. */
+function judge(G, t) {
+  let dirty = false;
+  const all = people(G), here = new Set(all.map((c) => c.id)), P = CONFIG.points, add = (id, n) => { G.pts[id] = (G.pts[id] || 0) + n; };
+  for (const id of Object.keys(G.frz)) if (!here.has(id)) { delete G.frz[id]; delete G.th[id]; dirty = true; } // left the room
+  for (const id of Object.keys(G.safe)) if (G.safe[id] < t) { delete G.safe[id]; dirty = true; }
+  let taggers = all.filter((c) => G.tag.includes(c.id));
+  if (!taggers.length) { // every tagger left: a free runner (a bot if there is one) takes over
+    const pick = all.filter((c) => !G.frz[c.id]).sort((a, b) => (b.bot ? 1 : 0) - (a.bot ? 1 : 0))[0];
+    if (!pick) return dirty;
+    G.tag = [...G.tag, pick.id]; taggers = [pick]; dirty = true;
+  }
+  const runners = all.filter((c) => !G.tag.includes(c.id));
+  for (const T of taggers) for (const r of runners) {
+    if (G.frz[r.id] || G.safe[r.id] || dist(T, r) > CONFIG.tagReach) continue;
+    G.frz[r.id] = 1; add(T.id, P.freeze); dirty = true;
+    for (const [id, th] of Object.entries(G.th)) if (th[1] === r.id) delete G.th[id]; // a thawer who gets frozen stops thawing
+  }
+  for (const r of runners) {
+    if (!G.frz[r.id]) continue;
+    const helps = (o) => o && o.id !== r.id && !G.frz[o.id] && dist(o, r) < CONFIG.thawReach;
+    const cur = G.th[r.id], helper = cur && helps(runners.find((o) => o.id === cur[1])) ? cur[1] : runners.find(helps)?.id;
+    if (!helper) { if (cur) { delete G.th[r.id]; dirty = true; } continue; }
+    if (!cur || cur[1] !== helper) { G.th[r.id] = [t, helper]; dirty = true; continue; }
+    if (t - cur[0] >= CONFIG.thawMs) { delete G.frz[r.id]; delete G.th[r.id]; G.safe[r.id] = t + CONFIG.safeMs; add(helper, P.thaw); dirty = true; }
+  }
+  const free = runners.filter((c) => !G.frz[c.id]);
+  const end = (win) => { Object.assign(G, { phase: "over", win, endedAt: t, endsAt: t + CONFIG.overMs, th: {} }); dirty = true; };
+  if (!runners.length) end("");
+  else if (!free.length) { for (const T of taggers) add(T.id, P.sweep); end("taggers"); }
+  else if (t >= G.endsAt) { for (const r of free) add(r.id, P.survive); end("runners"); }
+  return dirty;
+}
+
+// ── BOTS ────────────────────────────────────────────────────────────────────────────
+// One brain for every bot (and, in ?attract, for your own player): it sets a goal and a path
+// a few times a second, then steers along it every frame. Plausible, not perfect.
+const STILL = { mx: 0, mz: 0, dash: false };
+function botsTick(dt, G) {
+  const all = people(G), now = performance.now();
+  for (const b of host.bots.values()) {
+    const inp = canMove(b.id, G) ? botInput(b, G, all, now) : STILL;
+    stepBody(b, inp, dt, G.tag.includes(b.id) ? CONFIG.taggerSpeed * CONFIG.botPace.tagger : CONFIG.speed * CONFIG.botPace.runner, now, G.frz[b.id]);
+  }
+}
+function botInput(b, G, all, now) {
+  const tagger = G.tag.includes(b.id);
+  if (now > b.think) { b.think = now + (tagger ? 300 : 200) + Math.random() * 250; (tagger ? thinkTagger : thinkRunner)(b, G, all, now); }
+  let goal = b.goal;
+  const prey = b.chase && all.find((c) => c.id === b.chase);
+  if (prey && dist(b, prey) < 2.5 && clearLine(b, prey)) { goal = prey; b.path = []; } // close: lunge at where they are now
+  if (!goal) return STILL;
+  while (b.path.length > 1 && clearLine(b, b.path[1])) b.path.shift();
+  if (b.path.length && dist(b, b.path[0]) < 0.5) b.path.shift();
+  const p = b.path[0] || goal, dx = p.x - b.x, dz = p.z - b.z, d = Math.hypot(dx, dz);
+  if (d < (b.mode === "thaw" ? CONFIG.thawReach * 0.6 : 0.3)) return STILL;
+  return { mx: dx / d, mz: dz / d, dash: b.wantDash };
+}
+function setGoal(b, goal) { b.goal = goal; b.path = goal && !clearLine(b, goal) ? route(b, goal) : []; }
+/** A tagger bot picks the free runner it can catch soonest (people a bit sooner than bots), not one another bot is already after. */
+function thinkTagger(b, G, all) {
+  const others = [...host.bots.values()].filter((o) => o !== b && G.tag.includes(o.id)).map((o) => o.chase);
+  const free = all.filter((c) => !G.tag.includes(c.id) && !G.frz[c.id] && !G.safe[c.id]);
+  const score = (c) => dist(b, c) + (others.includes(c.id) ? 7 : 0) - (c.id === b.chase ? 2.5 : 0) - (c.bot ? 0 : 1.5) + (clearLine(b, c) ? 0 : 3);
+  const prey = free.sort((p, q) => score(p) - score(q))[0];
+  b.wantDash = false; b.mode = "chase";
+  if (!prey) { b.chase = ""; if (!b.goal || dist(b, b.goal) < 1) setGoal(b, randomSpot()); return; }
+  b.chase = prey.id;
+  setGoal(b, { x: prey.x, z: prey.z });
+  b.wantDash = dist(b, prey) < 2.8 && clearLine(b, prey) && Math.random() < 0.4;
+}
+/** A runner bot flees a tagger that's close, otherwise goes to thaw a frozen friend, otherwise wanders. */
+function thinkRunner(b, G, all, now) {
+  const taggers = all.filter((c) => G.tag.includes(c.id)), near = taggers.sort((p, q) => dist(p, b) - dist(q, b))[0], dn = near ? dist(near, b) : 99;
+  b.wantDash = false; b.chase = "";
+  if (dn < CONFIG.botFear) { // flee: the reachable spot ahead that keeps the most room from every tagger
+    let best = null, bestScore = -1e9;
+    for (let k = 0; k < 32; k++) {
+      const a = (k / 16) * Math.PI * 2, r = k < 16 ? 7 : 4, p = { x: b.x + Math.sin(a) * r, z: b.z + Math.cos(a) * r };
+      if (!walkable(p.x, p.z)) continue;
+      const room = Math.min(...taggers.map((T) => dist(T, p))), edge = Math.min(HALF - Math.abs(p.x), HALF - Math.abs(p.z));
+      const s = room - (edge < 5 ? (5 - edge) * 1.5 : 0) - (clearLine(b, p) ? 0 : 6) + Math.random() * 0.6;
+      if (s > bestScore) { bestScore = s; best = p; }
+    }
+    b.mode = "flee"; setGoal(b, best);
+    b.wantDash = dn < 3.4 && Math.random() < 0.65;
+    return;
+  }
+  const stuck = all.filter((c) => !G.tag.includes(c.id) && G.frz[c.id] && c.id !== b.id && Math.min(99, ...taggers.map((T) => dist(T, c))) > 4.5).sort((p, q) => dist(p, b) - dist(q, b))[0];
+  if (stuck && dist(stuck, b) < 22) { b.mode = "thaw"; setGoal(b, { x: stuck.x, z: stuck.z }); return; }
+  if (b.mode !== "wander" || !b.goal || dist(b, b.goal) < 1 || now > b.wander) { b.mode = "wander"; b.wander = now + 3000; setGoal(b, randomSpot()); }
+}
+function randomSpot() { for (;;) { const p = { x: (Math.random() - 0.5) * (CONFIG.arena - 6), z: (Math.random() - 0.5) * (CONFIG.arena - 6) }; if (walkable(p.x, p.z)) return p; } }
+/** One movement step (yours or a bot's): input mx/mz in -1..1, dash true/false. */
+function stepBody(b, inp, dt, speed, now, frozen) {
+  if (frozen) { b.vx = b.vz = 0; b.a = 0; return; }
+  let { mx, mz } = inp; const len = Math.hypot(mx, mz);
+  if (len > 1) { mx /= len; mz /= len; }
+  if (inp.dash && len > 0.1 && now >= b.dashReady) { b.dashUntil = now + CONFIG.dashMs; b.dashReady = now + CONFIG.dashCooldown; b.dx = mx / Math.max(len, 1e-3); b.dz = mz / Math.max(len, 1e-3); if (b === me) sound("dash"); }
+  const dashing = now < b.dashUntil, want = speed * (dashing ? CONFIG.dashSpeed : 1);
+  const tx = dashing ? b.dx * want : mx * want, tz = dashing ? b.dz * want : mz * want, k = Math.min(1, CONFIG.accel * dt * (dashing ? 2 : 1));
+  b.vx += (tx - b.vx) * k; b.vz += (tz - b.vz) * k;
+  moveBody(b, b.vx * dt, b.vz * dt);
+  const sp = Math.hypot(b.vx, b.vz);
+  if (sp > 0.5) b.h += angDiff(Math.atan2(b.vx, b.vz), b.h) * Math.min(1, dt * 14);
+  b.a = dashing ? 2 : sp > 1 ? 1 : 0;
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const FRIENDLY = ["Zippy", "Sunny", "Bouncy", "Lucky", "Speedy", "Sneaky"], CRITTERS = ["Otter", "Fox", "Bunny", "Panda", "Gecko", "Koala"];
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() || FRIENDLY[Math.floor(Math.random() * 6)] + " " + CRITTERS[Math.floor(Math.random() * 6)];
+let myColor = COLORS[0]; // picked on join: the first color nobody in the room has
+const me = { ...newBody(), id: "", gameId: -1, lastSend: 0, view: null, playAt: 0 };
+const nameOf = (id) => (id === net.sessionId ? myName : isBot(id) ? host.bots.get(id)?.name || botList().find((b) => b.i === id)?.n || "Bot" : S.entities.players[id]?.n || "Player");
+const colorOf = (id) => (id === net.sessionId ? myColor : isBot(id) ? host.bots.get(id)?.color || "#ccc" : S.entities.players[id]?.c || "#ccc");
+
+function myTick(dt, g, now) {
+  if (me.gameId !== g.id) { me.gameId = g.id; Object.assign(me, newBody(), spawnFor(net.sessionId, g)); $("over").hidden = true; }
+  const tagger = g.tag.includes(net.sessionId);
+  const inp = !canMove(net.sessionId, g) ? STILL : ATTRACT ? botInput(me, g, people(g), now) : readInput();
+  stepBody(me, inp, dt, tagger ? CONFIG.taggerSpeed : CONFIG.speed, now, !!g.frz[net.sessionId]);
+  if (now - me.lastSend > 80) { // ~12/s
+    me.lastSend = now;
+    net.me.set("p", JSON.stringify({ g: g.id, x: +me.x.toFixed(2), z: +me.z.toFixed(2), h: +me.h.toFixed(2), a: me.a }));
+  }
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+const local = { big: "", bigUntil: 0 };
+const bigText = (html, ms) => { local.big = html; local.bigUntil = performance.now() + ms; };
+let board = null, boardFor = -1, reconnecting = false;
+function hud(g) {
+  const t = Date.now(), tagger = g.tag.includes(net.sessionId), frozen = !!g.frz[net.sessionId];
+  $("frost").style.opacity = frozen && g.phase !== "over" && !ATTRACT ? 1 : 0;
+  if (ATTRACT) { for (const id of ["round", "role", "big", "msg", "net"]) $(id).textContent = ""; return; }
+  const runners = people(g).filter((c) => !g.tag.includes(c.id));
+  const icons = runners.map((c) => (g.frz[c.id] ? "🧊" : "🏃")).join("");
+  $("round").innerHTML = g.phase === "over" ? "" : `${g.phase === "brief" ? "Get ready" : fmt(Math.max(0, g.endsAt - t))}<small>${icons}</small>`;
+  $("role").classList.toggle("tagger", tagger); $("role").classList.toggle("runner", !tagger);
+  $("role").textContent = g.phase === "over" ? "" : tagger ? "❄ You're a TAGGER" : frozen ? "🧊 You're FROZEN" : "🏃 You're a RUNNER";
+  let big = performance.now() < local.bigUntil ? local.big : "";
+  if (g.phase === "brief") big = tagger ? `${Math.max(1, Math.ceil((g.startAt - t) / 1000))}<small>Count to three… then freeze them all!</small>` : `RUN!<small>The taggers start in ${Math.max(1, Math.ceil((g.startAt - t) / 1000))}…</small>`;
+  $("big").innerHTML = big ? `<div>${big}</div>` : "";
+  let msg = "";
+  if (g.phase === "play" || g.phase === "brief") {
+    if (!me.playAt) me.playAt = t;
+    const thawing = runners.find((c) => g.frz[c.id] && g.th[c.id] && g.th[c.id][1] === net.sessionId);
+    if (frozen) msg = g.th[net.sessionId] ? "A friend is thawing you… hold on!" : "Frozen! A free runner can thaw you by standing next to you.";
+    else if (thawing) msg = `Thawing ${esc(thawing.name)}… stay close!`;
+    else if (t - me.playAt < 9000) msg = touchUI ? "Left thumb runs · DASH for a burst of speed" : "WASD or hold the mouse to run · Space to dash";
+    else if (!tagger && runners.some((c) => g.frz[c.id])) msg = "Stand next to a frozen friend to thaw them";
+  }
+  $("msg").textContent = msg;
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : reconnecting ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the round" : ""}`;
+  $("dash").classList.toggle("wait", performance.now() < me.dashReady);
+  const over = g.phase === "over" && t - g.endedAt > 1200;
+  $("over").hidden = !over;
+  if (over) results(g, t);
+}
+function results(g, t) {
+  const mine = g.pts[net.sessionId] || 0, inRound = g.roster.some((r) => r[0] === net.sessionId), tagger = g.tag.includes(net.sessionId);
+  const won = inRound && ((g.win === "runners" && !tagger) || (g.win === "taggers" && tagger));
+  $("overTitle").textContent = g.win === "runners" ? (won ? "You held out! Runners win" : "Runners win!") : g.win === "taggers" ? (won ? "Everyone frozen! Taggers win" : "Frozen solid! Taggers win") : "Round over";
+  $("overLine").textContent = inRound ? `You scored ${mine} point${mine === 1 ? "" : "s"}${won ? " and your team won" : ""}.` : "You'll join the next round.";
+  const rows = g.roster.map(([id, name]) => ({ id, name: S.entities.players[id]?.n || name, pts: g.pts[id] || 0, tag: g.tag.includes(id) })).sort((a, b) => b.pts - a.pts).slice(0, 10);
+  $("results").innerHTML = rows.map((r) => `<li class="${r.id === net.sessionId ? "me" : ""}">${r.tag ? "❄ " : ""}${esc(r.id === net.sessionId ? "You" : r.name)}<span>${r.pts}</span></li>`).join("");
+  $("next").textContent = `Next round in ${Math.max(0, Math.ceil((g.endsAt - t) / 1000))}s`;
+  if (boardFor !== g.id) { boardFor = g.id; showBoard(inRound && me.gameId === g.id ? mine : 0); }
+}
+function showBoard(score) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (score > 0 ? board.submit(score).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} pts</span></li>`).join("") : "<li>No scores yet. Set the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+/** Keep a color nobody else has: the later sessionId gives way, and the bots' colors count as taken. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId), bots = botList().map((b) => b.c);
+  if (!others.some(([id, p]) => id < net.sessionId && p.c === myColor) && !bots.includes(myColor)) return;
+  const used = new Set([...others.map(([, p]) => p.c), ...bots]);
+  const free = COLORS.find((c) => !used.has(c));
+  if (!free || free === myColor) return;
+  myColor = free; net.me.set("c", myColor);
+  if (me.view) { scene.remove(me.view.g); me.view = null; }
+}
+$("again").onclick = () => { const g = game(); if (!g || g.phase !== "over") return; if (isHost()) host.again = true; else net.send("again", {}); $("over").hidden = true; };
+
+/** One-off effects worked out from what changed in state (so nobody misses one). */
+let prevG = null;
+function effects(g, all) {
+  if (prevG && prevG.id === g.id) {
+    const at = (id) => all.find((c) => c.id === id);
+    for (const id of Object.keys(g.frz)) if (!prevG.frz[id]) {
+      const c = at(id); if (c) burst(c.x, 1.2, c.z, ["#ffffff", "#a8ecff", "#5fd0ff"], 26, 9);
+      sound("freeze"); if (id === net.sessionId) { shake = 0.5; bigText("FROZEN!", 1300); }
+    }
+    for (const id of Object.keys(prevG.frz)) if (!g.frz[id] && g.phase === "play") {
+      const c = at(id); if (c) burst(c.x, 1.2, c.z, ["#ffb347", "#ffe066", "#ff7a3d"], 22, 8);
+      sound("thaw"); if (id === net.sessionId) bigText("THAWED!", 1100);
+    }
+    if (g.phase === "play" && prevG.phase === "brief") { sound("go"); bigText("GO!", 800); }
+    if (g.phase === "over" && prevG.phase !== "over") sound(g.win === "taggers" ? "sweep" : "bell");
+  }
+  prevG = g;
+}
+
+// ── INPUT & SOUND ───────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+$("dash").hidden = !touchUI;
+if (touchUI) $("msg").style.bottom = "calc(max(18px, env(safe-area-inset-bottom)) + 120px)";
+const keys = new Set(), stick = { id: -1, ox: 0, oy: 0, mx: 0, mz: 0 }, mouse = { down: false, nx: 0, ny: 0 };
+let dashAt = 0;
+addEventListener("keydown", (e) => { keys.add(e.key.toLowerCase()); if (e.key === " " || e.key === "Shift") { e.preventDefault(); dashAt = performance.now(); } unlockAudio(); });
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+addEventListener("blur", () => { keys.clear(); mouse.down = false; });
+const ray = new THREE.Raycaster(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+function readInput() {
+  const k = (a, b) => (keys.has(a) || keys.has(b) ? 1 : 0);
+  let mx = k("d", "arrowright") - k("a", "arrowleft") + stick.mx, mz = k("s", "arrowdown") - k("w", "arrowup") + stick.mz;
+  if (!mx && !mz && mouse.down) { // run toward the ground point under the pointer, through the camera that drew this frame
+    ray.setFromCamera({ x: mouse.nx, y: mouse.ny }, camera);
+    if (ray.ray.intersectPlane(groundPlane, hit)) { const dx = hit.x - me.x, dz = hit.z - me.z, d = Math.hypot(dx, dz); if (d > 0.4) { mx = dx / d; mz = dz / d; } }
+  }
+  return { mx, mz, dash: performance.now() - dashAt < 150 };
+}
+const cv = renderer.domElement;
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault(); unlockAudio();
+  if (e.pointerType === "mouse") { if (e.button === 2) dashAt = performance.now(); else mouse.down = true; mouse.nx = (e.clientX / innerWidth) * 2 - 1; mouse.ny = -(e.clientY / innerHeight) * 2 + 1; return; }
+  if (stick.id >= 0) return;
+  cv.setPointerCapture(e.pointerId);
+  Object.assign(stick, { id: e.pointerId, ox: e.clientX, oy: e.clientY, mx: 0, mz: 0 });
+  Object.assign($("stick").style, { left: e.clientX + "px", top: e.clientY + "px" }); $("stick").hidden = false;
+});
+cv.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "mouse") { mouse.nx = (e.clientX / innerWidth) * 2 - 1; mouse.ny = -(e.clientY / innerHeight) * 2 + 1; }
+  if (e.pointerId !== stick.id) return;
+  const dx = e.clientX - stick.ox, dy = e.clientY - stick.oy, d = Math.hypot(dx, dy), k = Math.min(1, d / 50) / (d || 1);
+  stick.mx = dx * k; stick.mz = dy * k;
+  $("stick").firstElementChild.style.transform = `translate(${stick.mx * 35}px, ${stick.mz * 35}px)`;
+});
+for (const ev of ["pointerup", "pointercancel"]) cv.addEventListener(ev, (e) => {
+  if (e.pointerType === "mouse" && e.button !== 2) mouse.down = false;
+  if (e.pointerId === stick.id) { Object.assign(stick, { id: -1, mx: 0, mz: 0 }); $("stick").hidden = true; }
+});
+$("dash").addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); dashAt = performance.now(); });
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+let AC = null;
+function unlockAudio() { if (!AC && !ATTRACT) try { AC = new AudioContext(); } catch {} }
+function sound(kind) {
+  if (!AC) return;
+  const t0 = AC.currentTime, tone = (f, d, type, v, f2, delay = 0) => {
+    const o = AC.createOscillator(), g = AC.createGain(); o.type = type; o.frequency.setValueAtTime(f, t0 + delay); o.frequency.exponentialRampToValueAtTime(f2, t0 + delay + d);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.setValueAtTime(v, t0 + delay); g.gain.exponentialRampToValueAtTime(0.001, t0 + delay + d); o.connect(g).connect(AC.destination); o.start(t0); o.stop(t0 + delay + d);
+  };
+  if (kind === "freeze") { tone(1900, 0.35, "sine", 0.12, 600); tone(2600, 0.25, "triangle", 0.06, 1200, 0.05); }
+  if (kind === "thaw") { tone(330, 0.25, "triangle", 0.14, 880); tone(660, 0.2, "sine", 0.08, 1320, 0.08); }
+  if (kind === "dash") tone(240, 0.16, "sawtooth", 0.05, 90);
+  if (kind === "go") tone(660, 0.3, "square", 0.08, 990);
+  if (kind === "bell") { tone(523, 0.5, "triangle", 0.14, 523); tone(659, 0.5, "triangle", 0.12, 659, 0.12); tone(784, 0.7, "triangle", 0.12, 784, 0.24); }
+  if (kind === "sweep") { tone(1200, 0.6, "sine", 0.12, 300); tone(1600, 0.8, "triangle", 0.06, 400, 0.1); }
+}
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0, shake = 0;
+const camLook = new THREE.Vector3(), camGoal = new THREE.Vector3();
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)), t = now / 1000; last = now;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(dt, now); else host.was = false;
+  const g = game();
+  if (!g) { renderer.render(scene, camera); return requestAnimationFrame(frame); }
+  myTick(dt, g, now);
+  const all = people(g);
+  effects(g, all);
+  drawKids(g, all, now, t, dt);
+  drawParts(dt);
+  moveCamera(g, all, dt);
+  renderer.render(scene, camera);
+  if (now - lastHud > 100) { lastHud = now; hud(g); }
+  requestAnimationFrame(frame);
+}
+function drawKids(g, all, now, t, dt) {
+  const seen = new Set(), live = new Set(livePlayers()), td = Date.now();
+  const thaw = (id) => (g.th[id] ? (td - g.th[id][0]) / CONFIG.thawMs : 0);
+  const draw = (v, id, s) => {
+    v.x = s.x; v.z = s.z; v.h = s.h; v.g.position.set(s.x, 0, s.z); v.g.rotation.y = s.h;
+    poseKid(v, s.a, g.tag.includes(id), !!g.frz[id], thaw(id), !!g.safe[id], t, dt);
+    if (s.a === 2 && Math.random() < 0.5) burst(s.x, 0.15, s.z, ["#ffffff", "#e6f5d0"], 1, 2);
+  };
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === net.sessionId || !live.has(id)) continue;
+    const q = posOf(id, p);
+    if (!q || q.g !== g.id) continue;
+    const s = sample(feed(id, p.p, q, now), now);
+    seen.add(id); draw(viewOf(id, p.c || "#ccc", p.n || "Player"), id, s);
+  }
+  const host_ = isHost(), bots = host_ ? [...host.bots.values()] : botList(), raw = S.shared.bots;
+  for (const b of bots) {
+    const id = host_ ? b.id : b.i, s = host_ ? b : sample(feed(id, raw, b, now), now);
+    seen.add(id); draw(viewOf(id, host_ ? b.color : b.c, host_ ? b.name : b.n), id, s);
+  }
+  for (const [id, v] of views) if (!seen.has(id)) { scene.remove(v.g); views.delete(id); tracks.delete(id); }
+  if (!me.view) me.view = makeKid(myColor, "");
+  draw(me.view, net.sessionId, me);
+  // a pulsing ring under you so you can always find yourself
+  if (!youRing.parent) scene.add(youRing);
+  youRing.visible = !ATTRACT; youRing.position.set(me.x, 0.03, me.z); youRing.scale.setScalar(1.3 + Math.sin(t * 4) * 0.08);
+}
+const youRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 36).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.7, depthWrite: false }));
+/** High and behind you (higher on a tall phone). ?attract follows the first tagger and whoever it is after. */
+function moveCamera(g, all, dt) {
+  let fx = me.x, fz = me.z;
+  if (ATTRACT) {
+    const T = all.find((c) => c.id === g.tag[0]);
+    if (T) {
+      const prey = all.filter((c) => !g.tag.includes(c.id) && !g.frz[c.id] && dist(c, T) < 7).sort((p, q) => dist(p, T) - dist(q, T))[0];
+      fx = prey ? T.x + (prey.x - T.x) * 0.4 : T.x; fz = prey ? T.z + (prey.z - T.z) * 0.4 : T.z;
+    }
+  }
+  const tall = camera.aspect < 1, hgt = ATTRACT ? 12 : tall ? 25 : 17, back = ATTRACT ? 4.5 : 12;
+  camGoal.set(fx, 0, fz);
+  camLook.lerp(camGoal, 1 - Math.pow(ATTRACT ? 0.08 : 0.002, dt));
+  shake = Math.max(0, shake - dt);
+  camera.position.set(camLook.x + (Math.random() - 0.5) * shake, hgt, camLook.z + back + (Math.random() - 0.5) * shake);
+  camera.lookAt(camLook.x, 0, camLook.z - 0.5);
+}
+
+(async function start() {
+  net = await connect();
+  me.id = net.sessionId;
+  net.onState((st) => { S = st; });
+  net.on("again", () => { const g = game(); if (isHost() && g && g.phase === "over") host.again = true; });
+  net.onDisconnect(() => { reconnecting = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { reconnecting = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  camLook.set(0, 0, 10);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

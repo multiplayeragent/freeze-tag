@@ -1,0 +1,21 @@
+{
+  "name": "Freeze Tag",
+  "genre": "party",
+  "dim": "3D",
+  "mode": "Party",
+  "players": "3–10",
+  "hook": "Get tagged, freeze. Touch a friend to thaw them.",
+  "how": "Taggers freeze every runner they touch. Frozen runners wait in a block of ice until a free teammate stands next to them for a second. If anyone is still free when the clock runs out, the runners win; freeze them all and the taggers do.",
+  "controls": "WASD or hold the mouse to run, Space to dash, or the touch stick and Dash button",
+  "uses": [
+    ["Host-run rounds", "The host's browser picks the taggers, decides every freeze and thaw and keeps the score; if it leaves, the next player takes over."],
+    ["Bots", "Bot taggers chase and bot runners flee and thaw their friends until enough people join."],
+    ["Live sync", "Every runner, tagger and ice block is the same for everyone."],
+    ["Leaderboard", "The most points anyone scored in one round."]
+  ],
+  "ideas": [
+    "Make it a snowball fight in a winter park",
+    "Add a power-up that makes you invisible for 3 seconds",
+    "Let the last runner standing get a golden crown"
+  ]
+}
