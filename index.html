@@ -26,6 +26,7 @@
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
   .card li span { float: right; font-variant-numeric: tabular-nums; }
   .card li.me { color: #ffe066; font-weight: 700; }
+  .card li.note { list-style: none; margin-left: -18px; opacity: .8; }
   .card p { margin: 6px 0 0; font-size: 14px; opacity: .9; }
   button.go { margin-top: 16px; width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe066; color: #133a63; font: 800 17px system-ui, sans-serif; cursor: pointer; }
   #stick { position: fixed; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff88; pointer-events: none; }
@@ -49,7 +50,7 @@
 <div id="over" hidden><div class="card">
   <h2 id="overTitle"></h2><p id="overLine"></p>
   <h3>This round</h3><ol id="results"></ol>
-  <h3>Best rounds</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Best rounds</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button>
   <p id="next"></p>
 </div></div>
@@ -69,6 +70,7 @@
  *   ME ............ running and dashing. Each player writes only its own.
  *   HUD & RESULTS . timer, your role, hints, results card, leaderboard
  *   INPUT & SOUND . keyboard, mouse, touch stick and dash button, WebAudio effects
+ *   MAIN LOOP ..... each frame: drawing everyone, the camera, fading what stands between it and you
  *
  * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
  *   - Each player writes its OWN entity: `p` (one packed JSON field: round id, position,
@@ -292,19 +294,22 @@ const letterTex = (color, letter) => canvasTex(128, 128, (c) => {
   if (letter) { c.fillStyle = "#ffffff"; c.font = "900 78px system-ui, sans-serif"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(letter, 64, 70); }
 });
 const trees = CONFIG.things.filter((t) => t.kind === "tree");
+const blockers = []; // [meshes of one thing]: faded when it stands between the camera and you (see fadeBlockers)
 for (const t of CONFIG.things) {
+  const parts = [];
   if (t.kind === "block") {
     const side = mat("#ffffff", { map: letterTex(t.color, t.letter) }), top = mat("#ffffff", { map: letterTex(t.color, "") });
-    add(new THREE.BoxGeometry(t.w, t.h, t.d), t.letter ? [side, side, top, top, side, side] : mat(t.color), t.x, t.h / 2, t.z);
+    parts.push(add(new THREE.BoxGeometry(t.w, t.h, t.d), t.letter ? [side, side, top, top, side, side] : mat(t.color), t.x, t.h / 2, t.z));
   } else if (t.kind === "tower") {
     const stripes = canvasTex(64, 128, (c) => { for (let y = 0; y < 128; y += 32) { c.fillStyle = t.color; c.fillRect(0, y, 64, 16); c.fillStyle = "#ffffff"; c.fillRect(0, y + 16, 64, 16); } });
-    add(new THREE.CylinderGeometry(t.r, t.r + 0.1, t.h, 28), mat("#ffffff", { map: stripes }), t.x, t.h / 2, t.z);
-    add(new THREE.ConeGeometry(t.r + 0.6, 1.8, 28), mat("#ff5d73"), t.x, t.h + 0.9, t.z);
-    add(new THREE.SphereGeometry(0.25, 12, 10), mat("#ffd23f"), t.x, t.h + 1.9, t.z);
+    parts.push(add(new THREE.CylinderGeometry(t.r, t.r + 0.1, t.h, 28), mat("#ffffff", { map: stripes }), t.x, t.h / 2, t.z));
+    parts.push(add(new THREE.ConeGeometry(t.r + 0.6, 1.8, 28), mat("#ff5d73"), t.x, t.h + 0.9, t.z));
+    parts.push(add(new THREE.SphereGeometry(0.25, 12, 10), mat("#ffd23f"), t.x, t.h + 1.9, t.z));
   } else if (t.kind === "post") {
-    add(new THREE.CylinderGeometry(t.r, t.r, t.h, 20), mat(t.color), t.x, t.h / 2, t.z);
-    add(new THREE.SphereGeometry(t.r * 1.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat("#ffffff"), t.x, t.h, t.z);
+    parts.push(add(new THREE.CylinderGeometry(t.r, t.r, t.h, 20), mat(t.color), t.x, t.h / 2, t.z));
+    parts.push(add(new THREE.SphereGeometry(t.r * 1.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat("#ffffff"), t.x, t.h, t.z));
   }
+  if (parts.length) blockers.push(parts);
 }
 {
   const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.3, 0.42, 1.8, 8), mat("#8a5a34"), trees.length);
@@ -678,11 +683,11 @@ function results(g, t) {
 }
 function showBoard(score) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = '<li class="note">Leaderboards need a connection.</li>'; return; } // status lines are not numbered entries
+  list.innerHTML = '<li class="note">Loading…</li>';
   (score > 0 ? board.submit(score).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} pts</span></li>`).join("") : "<li>No scores yet. Set the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} pts</span></li>`).join("") : '<li class="note">No scores yet. Set the first.</li>';
+  }).catch(() => { list.innerHTML = '<li class="note">Couldn\'t load the leaderboard.</li>'; });
 }
 /** Keep a color nobody else has: the later sessionId gives way, and the bots' colors count as taken. */
 function fixColor() {
@@ -792,6 +797,7 @@ function frame(now) {
   drawKids(g, all, now, t, dt);
   drawParts(dt);
   moveCamera(g, all, dt);
+  fadeBlockers(dt);
   renderer.render(scene, camera);
   if (now - lastHud > 100) { lastHud = now; hud(g); }
 }
@@ -839,6 +845,21 @@ function moveCamera(g, all, dt) {
   shake = Math.max(0, shake - dt);
   camera.position.set(camLook.x + (Math.random() - 0.5) * shake, hgt, camLook.z + back + (Math.random() - 0.5) * shake);
   camera.lookAt(camLook.x, 0, camLook.z - 0.5);
+}
+/** The tower and the toy blocks turn see-through while they stand between the camera and you, so you never lose your kid behind them. */
+const fadeRay = new THREE.Raycaster(), toMe = new THREE.Vector3();
+function fadeBlockers(dt) {
+  toMe.set(me.x, 1, me.z).sub(camera.position);
+  const far = toMe.length();
+  fadeRay.set(camera.position, toMe.normalize()); fadeRay.far = far;
+  for (const parts of blockers) {
+    const hidesMe = !ATTRACT && fadeRay.intersectObjects(parts, false).length > 0;
+    for (const m of parts) for (const mt of [m.material].flat()) {
+      mt.opacity += ((hidesMe ? 0.3 : 1) - mt.opacity) * Math.min(1, dt * 10);
+      const see = mt.opacity < 0.99;
+      if (mt.transparent !== see) { mt.transparent = see; mt.needsUpdate = true; } // three.js rebuilds the shader when this flips
+    }
+  }
 }
 
 (async function start() {
